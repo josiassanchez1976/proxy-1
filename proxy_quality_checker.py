@@ -97,6 +97,7 @@ def load_proxies(path: str) -> List[ProxyInfo]:
     return proxies
 
 
+
 def detectar_tipo_de_proxies(lista: List[str]) -> str:
     if any(":socks5" in p.lower() for p in lista):
         return "socks5"
@@ -125,33 +126,33 @@ def is_blacklisted(ip: str) -> bool:
     return False
 
 
-def analyze_proxy(proxy: str, tipo: str):
-    parts = proxy.split(":")
-    if len(parts) < 2:
-        return None
-    ip, port = parts[0], parts[1]
-    if not proxy_is_alive(ip, int(port), tipo):
+def analyze_proxy(proxy: ProxyInfo) -> Optional[ProxyInfo]:
+    ip, port = proxy.address.split(":")
+    if not proxy_is_alive(ip, int(port), proxy.proxy_type):
         return None
     if is_blacklisted(ip):
         return None
-    return {"proxy": f"{ip}:{port}", "tipo": tipo}
+    return proxy
 
 
-def mostrar_en_tabla(resultado: Dict[str, str]) -> None:
+def mostrar_en_tabla(resultado: ProxyInfo) -> None:
     if APP_INSTANCE is None:
         return
-    proxy_info = ProxyInfo(address=resultado["proxy"], proxy_type=resultado["tipo"])
-    APP_INSTANCE.results.append(proxy_info)
-    APP_INSTANCE._update_tree(proxy_info)
+    APP_INSTANCE.results.append(resultado)
+    APP_INSTANCE._update_tree(resultado)
 
 
-def verificar_lista_de_proxies_concurrente(proxies: List[str], tipo: str, max_workers: int = 20) -> None:
+def verificar_lista_de_proxies_concurrente(proxies: List[ProxyInfo], max_workers: int = 20) -> None:
+    valid: List[ProxyInfo] = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(analyze_proxy, p, tipo) for p in proxies]
+        futures = [executor.submit(analyze_proxy, p) for p in proxies]
         for future in as_completed(futures):
             resultado = future.result()
             if resultado:
+                valid.append(resultado)
                 mostrar_en_tabla(resultado)
+    if APP_INSTANCE is not None:
+        APP_INSTANCE.proxies = valid
 
 # ------------------------------ Network Checks ------------------------------ #
 
@@ -363,13 +364,15 @@ class ProxyCheckerApp:
         file_path = filedialog.askopenfilename(filetypes=[("Text files", "*.txt")])
         if not file_path:
             return
-        with open(file_path, "r", encoding="utf-8") as f:
-            lines = [line.strip() for line in f if line.strip()]
-        tipo = detectar_tipo_de_proxies(lines)
+        proxies = load_proxies(file_path)
         self.tree.delete(*self.tree.get_children())
         self.results.clear()
-        self.proxies = [p for p in load_proxies(file_path)]
-        threading.Thread(target=verificar_lista_de_proxies_concurrente, args=(lines, tipo), daemon=True).start()
+        self.proxies = []
+        threading.Thread(
+            target=verificar_lista_de_proxies_concurrente,
+            args=(proxies,),
+            daemon=True,
+        ).start()
 
     def configure_apis(self) -> None:
         top = tk.Toplevel(self.root)
